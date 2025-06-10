@@ -6,3 +6,4 @@ google-auth-oauthlib
 dotenv
 gspread
 oauth2client
+pytz

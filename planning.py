@@ -1,4 +1,5 @@
 import datetime
+import pytz
 import os
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
@@ -9,6 +10,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from oauth2client.service_account import ServiceAccountCredentials
+from google.oauth2 import service_account
 
 load_dotenv()
 # -------- CONFIGURATION --------
@@ -19,10 +21,18 @@ CALENDAR_ID = os.getenv("CALENDAR_ID")
 SHEET_NAME = os.getenv("SHEET_NAME", "Disponibilités")
 SERVICE_ACCOUNT_FILE = "service_account.json"
 
-SCOPES = ["https://www.googleapis.com/auth/calendar"]
-CALENDAR_ID = "cb8244901b35d460f7881d7d920ee84204e4348cd682dabf860690df3fe6793e@group.calendar.google.com"  # ou autre ID d'agenda
+SCOPES = ["https://www.googleapis.com/auth/calendar", "https://www.googleapis.com/auth/spreadsheets"]
 CREDENTIALS_FILE = "credentials.json"
 TOKEN_FILE = "token.json"
+SHEET_ID = os.getenv("SHEET_ID", "1yNTdEt5607pVyrrsp7Tiy8Vu1aOkZg-ucA6yr3kN1XA")  # ID Google Sheet
+
+creds = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+timezone = pytz.timezone('Europe/Paris')
+TIMEZONE = "Europe/Paris"
+
+calendar_service = build("calendar", "v3", credentials=creds)
+sheet_client = gspread.authorize(creds)
+sheet = sheet_client.open_by_key(SHEET_ID).sheet1
 app = App(token=SLACK_BOT_TOKEN)
 
 # -- Google Sheets
@@ -63,51 +73,17 @@ def get_calendar_service():
     return build("calendar", "v3", credentials=creds)
 
 def is_slot_free(service, start, end):
+    # Convertir en fuseau horaire et en ISO 8601
+    start_utc = start.astimezone(pytz.UTC).isoformat()
+    end_utc = end.astimezone(pytz.UTC).isoformat()
+
     events = service.events().list(
         calendarId=CALENDAR_ID,
-        timeMin=start.isoformat() + 'Z',
-        timeMax=end.isoformat() + 'Z',
+        timeMin=start_utc,
+        timeMax=end_utc,
         singleEvents=True
     ).execute().get("items", [])
     return len(events) == 0
-
-@app.command("/rdv")
-def handle_rdv(ack, body, respond):
-    ack()
-    user = body["user_name"]
-    rows = load_sheet_rows()
-    today = datetime.datetime.now().strftime('%A')
-    slots = get_slots_for_day(today, rows)
-    service = get_calendar_service()
-    
-    available = []
-    for start, end in slots:
-        if is_slot_free(service, start, end):
-            available.append((start, end))
-    if not available:
-        respond("Aucun créneau libre aujourd’hui 😕")
-        return
-
-    blocks = []
-    for i, (start, end) in enumerate(available[:3]):
-        blocks.append({
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": f"*Créneau {i+1}* : {start.strftime('%H:%M')} - {end.strftime('%H:%M')}"
-            },
-            "accessory": {
-                "type": "button",
-                "text": {"type": "plain_text", "text": "Réserver"},
-                "value": f"{start.isoformat()}|{end.isoformat()}",
-                "action_id": "book_meeting"
-            }
-        })
-
-    respond(
-        text="Voici les créneaux disponibles aujourd’hui :",
-        blocks=blocks
-    )
 
 @app.action("book_meeting")
 def handle_booking(ack, body, respond):
@@ -307,65 +283,124 @@ def get_calendar_service():
 
 # Commande Slack : /rdv
 @app.command("/rdv")
-def handle_rdv(ack, body, respond):
+def handle_rdv(ack, body, client):
     ack()
-    user = body["user_name"]
+    rows = sheet.get_all_records()
 
-    service = get_calendar_service()
+    blocks = []
+    for idx, row in enumerate(rows):
+        if row["Disponible"] == "✅":
+            date = row["Date"]
+            time = row["Heure"]
+            duration = int(row["Durée"])
+            label = f"{date} - {time} ({duration} min)"
+            value = f"{idx}|{date}|{time}|{duration}"
+            blocks.append({
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": f"*{label}*"},
+                "accessory": {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "Réserver"},
+                    "action_id": "book_slot",
+                    "value": value
+                }
+            })
 
-    # Chercher les événements déjà pris aujourd’hui
-    now = datetime.datetime.utcnow()
-    start_time = now.isoformat() + 'Z'
-    end_time = (now + datetime.timedelta(days=1)).isoformat() + 'Z'
+    if not blocks:
+        client.chat_postMessage(channel=body["user_id"], text="Aucun créneau disponible.")
+        return
 
-    events_result = service.events().list(
+    client.chat_postMessage(
+        channel=body["user_id"],
+        text="Voici les créneaux disponibles :",
+        blocks=blocks
+    )
+
+@app.action("book_slot")
+def handle_booking(ack, body, client):
+    ack()
+    user = body["user"]["username"]
+    value = body["actions"][0]["value"]
+    row_idx, date_str, time_str, duration = value.split("|")
+    row_idx = int(row_idx)
+    duration = int(duration)
+
+    start = datetime.datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
+    end = start + datetime.timedelta(minutes=duration)
+
+    start_iso = start.isoformat()
+    end_iso = end.isoformat()
+
+    # Vérifie disponibilité
+    events = calendar_service.events().list(
         calendarId=CALENDAR_ID,
-        timeMin=start_time,
-        timeMax=end_time,
+        timeMin=start.isoformat() + "Z",
+        timeMax=end.isoformat() + "Z",
+        singleEvents=True
+    ).execute()
+    if events.get("items"):
+        client.chat_postMessage(channel=body["user"]["id"], text="❌ Ce créneau est déjà réservé.")
+        return
+
+    # Réserve dans Calendar
+    calendar_service.events().insert(calendarId=CALENDAR_ID, body={
+        "summary": f"RDV avec {user}",
+        "start": {"dateTime": start_iso, "timeZone": TIMEZONE},
+        "end": {"dateTime": end_iso, "timeZone": TIMEZONE},
+    }).execute()
+
+    # Marque comme réservé dans la Sheet
+    sheet.update_cell(row_idx + 2, 4, "❌")  # ligne +2 (en-tête + index 0)
+
+    # Confirmation
+    client.chat_postMessage(channel=body["user"]["id"],
+                            text=f"✅ Rendez-vous confirmé : {date_str} à {time_str} pour {duration} min.")
+
+@app.view("rdv_submit")
+def handle_submission(ack, body, view, logger, client):
+    ack()
+    user = body["user"]["username"]
+    values = view["state"]["values"]
+
+    start_hour = values["start_time_block"]["start_time_input"]["selected_option"]["value"]
+    duration_min = int(values["duration_block"]["duration_input"]["selected_option"]["value"])
+    subject = values["subject_block"]["subject_input"]["value"]
+
+    now = datetime.datetime.now()
+    start_dt = datetime.datetime.combine(now.date(), datetime.datetime.strptime(start_hour, "%H:%M").time())
+    end_dt = start_dt + datetime.timedelta(minutes=duration_min)
+
+    start_str = start_dt.isoformat()
+    end_str = end_dt.isoformat()
+
+    # 🔍 Vérifier si un événement existe déjà
+    events = calendar_service.events().list(
+        calendarId=CALENDAR_ID,
+        timeMin=start_str,
+        timeMax=end_str,
         singleEvents=True,
         orderBy='startTime'
     ).execute()
-    events = events_result.get('items', [])
+    
 
-    busy_times = [
-        (e['start']['dateTime'], e['end']['dateTime'])
-        for e in events if 'dateTime' in e['start']
-    ]
-
-    # Créneaux entre 9h et 17h
-    free_slots = []
-    today = now.date()
-    for hour in range(9, 17):
-        slot_start = datetime.datetime.combine(today, datetime.time(hour, 0)).isoformat() + 'Z'
-        slot_end = datetime.datetime.combine(today, datetime.time(hour + 1, 0)).isoformat() + 'Z'
-        if not any(bs <= slot_start < be for bs, be in busy_times):
-            free_slots.append((slot_start, slot_end))
-
-    if not free_slots:
-        respond("Désolé, aucun créneau libre aujourd’hui 😕")
+    if events.get("items"):
+        client.chat_postMessage(channel=body["user"]["id"], text="❌ Ce créneau est déjà occupé.")
         return
 
-    # Proposer des boutons cliquables avec action_id
-    blocks = []
-    for i, (start, end) in enumerate(free_slots[:3]):
-        blocks.append({
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": f"*Créneau {i+1}* : {start[11:16]} - {end[11:16]}"
-            },
-            "accessory": {
-                "type": "button",
-                "text": {"type": "plain_text", "text": "Réserver"},
-                "action_id": "book_meeting",  # <-- Action ID REQUIS ici
-                "value": f"{start}|{end}"
-            }
-        })
+    # ✅ Créer l'événement dans Calendar
+    event = {
+        "summary": f"{subject} - {user}",
+        "start": {"dateTime": start_str, "timeZone": TIMEZONE},
+        "end": {"dateTime": end_str, "timeZone": TIMEZONE},
+    }
+    calendar_service.events().insert(calendarId=CALENDAR_ID, body=event).execute()
 
-    respond(
-        text="Voici mes créneaux libres aujourd’hui :",
-        blocks=blocks
-    )
+    # 🧾 Ajouter à Google Sheet
+    sheet.append_row([str(now.date()), start_hour, f"{duration_min} min", subject, user])
+
+    # ✅ Confirmer
+    client.chat_postMessage(channel=body["user"]["id"], text=f"✅ RDV confirmé à {start_hour} pour {duration_min} min.")
+
 
 # Interactivité bouton
 @app.action("book_meeting")
@@ -384,6 +419,8 @@ def handle_booking(ack, body, respond):
     }
 
     service.events().insert(calendarId=CALENDAR_ID, body=event).execute()
+    
+    print("response agenda :", t)
 
     respond(f"✅ Rendez-vous réservé de {start[11:16]} à {end[11:16]}")
 
