@@ -1,6 +1,7 @@
 import datetime
 import pytz
 import os
+import json
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from dotenv import load_dotenv
@@ -20,6 +21,7 @@ SLACK_APP_TOKEN = os.getenv("SLACK_APP_TOKEN")
 CALENDAR_ID = os.getenv("CALENDAR_ID")
 SHEET_NAME = os.getenv("SHEET_NAME", "Disponibilités")
 SERVICE_ACCOUNT_FILE = os.getenv("SERVICE_ACCOUNT_FILE", "service_account.json")  # Chemin vers le fichier JSON de service account
+SERVICE_ACCOUNT_INFO = json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"])
 
 SCOPES = ["https://www.googleapis.com/auth/calendar", "https://www.googleapis.com/auth/spreadsheets"]
 CREDENTIALS_FILE = os.getenv("CREDENTIALS_FILE", "credentials.json")  # Chemin vers le fichier de credentials OAuth2
@@ -67,7 +69,7 @@ def get_slots_for_day(day_name, rows):
 # -- Google Calendar
 def get_calendar_service():
     creds = service_account.Credentials.from_service_account_file(
-        SERVICE_ACCOUNT_FILE,
+        SERVICE_ACCOUNT_INFO,
         scopes=["https://www.googleapis.com/auth/calendar"]
     )
     return build("calendar", "v3", credentials=creds)
