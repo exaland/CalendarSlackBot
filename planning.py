@@ -19,11 +19,11 @@ SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN")
 SLACK_APP_TOKEN = os.getenv("SLACK_APP_TOKEN")
 CALENDAR_ID = os.getenv("CALENDAR_ID")
 SHEET_NAME = os.getenv("SHEET_NAME", "Disponibilités")
-SERVICE_ACCOUNT_FILE = "service_account.json"
+SERVICE_ACCOUNT_FILE = os.getenv("SERVICE_ACCOUNT_FILE", "service_account.json")  # Chemin vers le fichier JSON de service account
 
 SCOPES = ["https://www.googleapis.com/auth/calendar", "https://www.googleapis.com/auth/spreadsheets"]
-CREDENTIALS_FILE = "credentials.json"
-TOKEN_FILE = "token.json"
+CREDENTIALS_FILE = os.getenv("CREDENTIALS_FILE", "credentials.json")  # Chemin vers le fichier de credentials OAuth2
+TOKEN_FILE = os.getenv("TOKEN_FILE", "token.json")  # Fichier pour stocker le token OAuth2
 SHEET_ID = os.getenv("SHEET_ID", "1yNTdEt5607pVyrrsp7Tiy8Vu1aOkZg-ucA6yr3kN1XA")  # ID Google Sheet
 
 creds = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
