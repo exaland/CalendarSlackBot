@@ -99,6 +99,13 @@ def handle_booking(ack, body, respond):
         "summary": f"Rendez-vous avec {user}",
         "start": {"dateTime": start.isoformat(), "timeZone": "Europe/Paris"},
         "end": {"dateTime": end.isoformat(), "timeZone": "Europe/Paris"},
+        "reminders": {
+            "useDefault": False,
+            "overrides": [
+                {"method": "email", "minutes": 24 * 60},  # 1 jour avant
+                {"method": "popup", "minutes": 60}  # 1 heure avant
+            ]
+        }
     }
 
     service.events().insert(calendarId=CALENDAR_ID, body=event).execute()
@@ -347,6 +354,13 @@ def handle_booking(ack, body, client):
         "summary": f"RDV avec {user}",
         "start": {"dateTime": start_iso, "timeZone": TIMEZONE},
         "end": {"dateTime": end_iso, "timeZone": TIMEZONE},
+        "reminders": {
+            "useDefault": False,
+            "overrides": [
+                {"method": "email", "minutes": 24 * 60},  # 1 jour avant
+                {"method": "popup", "minutes": 60}  # 1 heure avant
+            ]
+        }
     }).execute()
 
     # Marque comme réservé dans la Sheet
@@ -392,6 +406,13 @@ def handle_submission(ack, body, view, logger, client):
         "summary": f"{subject} - {user}",
         "start": {"dateTime": start_str, "timeZone": TIMEZONE},
         "end": {"dateTime": end_str, "timeZone": TIMEZONE},
+        "reminders": {
+            "useDefault": False,
+            "overrides": [
+                {"method": "email", "minutes": 24 * 60},  # 1 jour avant
+                {"method": "popup", "minutes": 60}  # 1 heure avant
+            ]
+        }
     }
     calendar_service.events().insert(calendarId=CALENDAR_ID, body=event).execute()
 
@@ -416,6 +437,13 @@ def handle_booking(ack, body, respond):
         'summary': f'Rendez-vous avec {user}',
         'start': {'dateTime': start, 'timeZone': 'Europe/Paris'},
         'end': {'dateTime': end, 'timeZone': 'Europe/Paris'},
+        'reminders': {
+            'useDefault': False,
+            'overrides': [
+                {'method': 'email', 'minutes': 24 * 60},  # 1 jour avant
+                {'method': 'popup', 'minutes': 60}  # 1 heure avant
+            ]
+        }
     }
 
     service.events().insert(calendarId=CALENDAR_ID, body=event).execute()
